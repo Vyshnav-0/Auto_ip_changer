@@ -8,8 +8,20 @@ import random
 
 def get_current_ip():
     try:
-        response = requests.get('https://api.ipify.org?format=json')
-        return response.json()['ip']
+        # Try multiple IP checking services
+        services = [
+            'https://api.ipify.org?format=json',
+            'https://api.myip.com',
+            'https://ip.seeip.org/json'
+        ]
+        for service in services:
+            try:
+                response = requests.get(service, timeout=5)
+                if response.status_code == 200:
+                    return response.json()['ip']
+            except:
+                continue
+        return "Could not get IP"
     except:
         return "Could not get IP"
 
@@ -30,6 +42,16 @@ def create_auth_file():
         f.write("vpnbook\n")  # username
         f.write("afsz8r7\n")  # password
     return auth_file
+
+def verify_vpn_connection():
+    # Check if we're connected to VPN by looking for tun0 interface
+    try:
+        result = subprocess.run(["ip", "addr", "show", "tun0"], 
+                              capture_output=True, 
+                              text=True)
+        return result.returncode == 0
+    except:
+        return False
 
 def change_ip():
     try:
@@ -52,16 +74,26 @@ def change_ip():
         
         # Kill any existing OpenVPN processes
         subprocess.run(["sudo", "killall", "openvpn"], stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(3)  # Increased wait time
 
         # Start new OpenVPN connection with auth file
-        subprocess.Popen([
+        process = subprocess.Popen([
             "sudo", "openvpn",
             "--config", selected_server,
-            "--auth-user-pass", auth_file
+            "--auth-user-pass", auth_file,
+            "--verb", "3"  # Add verbose output
         ])
         
         # Wait for connection to establish
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            if verify_vpn_connection():
+                print("VPN connection established!")
+                break
+            print(f"Waiting for VPN connection... Attempt {attempt + 1}/{max_attempts}")
+            time.sleep(2)
+        
+        # Additional wait to ensure connection is stable
         time.sleep(5)
         
         # Get new IP
@@ -86,11 +118,11 @@ def main():
     try:
         while True:
             if change_ip():
-                print("Waiting 3 seconds before next change...")
-                time.sleep(3)
+                print("Waiting 5 seconds before next change...")
+                time.sleep(5)  # Increased wait time
             else:
-                print("Failed to change IP. Retrying in 3 seconds...")
-                time.sleep(3)
+                print("Failed to change IP. Retrying in 5 seconds...")
+                time.sleep(5)  # Increased wait time
     except KeyboardInterrupt:
         print("\nStopping IP Changer...")
         subprocess.run(["sudo", "killall", "openvpn"], stderr=subprocess.DEVNULL)
