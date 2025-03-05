@@ -5,6 +5,17 @@ import requests
 import sys
 import os
 import random
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.table import Table
+from rich.live import Live
+from rich.layout import Layout
+from rich.text import Text
+from rich import print as rprint
+
+# Initialize rich console
+console = Console()
 
 def get_current_ip():
     try:
@@ -32,7 +43,7 @@ def get_ovpn_files():
         ovpn_files = [f for f in os.listdir(ovpn_folder) if f.endswith('.ovpn')]
         return [os.path.join(ovpn_folder, f) for f in ovpn_files]
     except Exception as e:
-        print(f"Error reading OpenVPN folder: {e}")
+        console.print(f"[red]Error reading OpenVPN folder: {e}[/red]")
         return []
 
 def create_auth_file():
@@ -53,52 +64,85 @@ def verify_vpn_connection():
     except:
         return False
 
+def create_status_table(current_ip, new_ip, server_name):
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Status", style="cyan")
+    table.add_column("Value", style="green")
+    
+    table.add_row("Current IP", str(current_ip))
+    table.add_row("New IP", str(new_ip))
+    table.add_row("Connected Server", server_name)
+    table.add_row("VPN Status", "[green]Connected[/green]" if verify_vpn_connection() else "[red]Disconnected[/red]")
+    
+    return table
+
 def change_ip():
     try:
         # Get current IP before change
         current_ip = get_current_ip()
-        print(f"Current IP: {current_ip}")
+        console.print(Panel(f"[yellow]Current IP:[/yellow] [green]{current_ip}[/green]", title="Initial Status"))
 
         # Get list of available OpenVPN configurations
         ovpn_files = get_ovpn_files()
         if not ovpn_files:
-            print("No OpenVPN configuration files found!")
+            console.print("[red]No OpenVPN configuration files found![/red]")
             return False
 
         # Randomly select a VPN server
         selected_server = random.choice(ovpn_files)
-        print(f"Connecting to: {os.path.basename(selected_server)}")
+        server_name = os.path.basename(selected_server)
+        console.print(Panel(f"[yellow]Selected Server:[/yellow] [green]{server_name}[/green]", title="Server Selection"))
 
         # Create auth file
         auth_file = create_auth_file()
         
         # Kill any existing OpenVPN processes
         subprocess.run(["sudo", "killall", "openvpn"], stderr=subprocess.DEVNULL)
-        time.sleep(3)  # Increased wait time
+        time.sleep(3)
 
         # Start new OpenVPN connection with auth file
         process = subprocess.Popen([
             "sudo", "openvpn",
             "--config", selected_server,
             "--auth-user-pass", auth_file,
-            "--verb", "3"  # Add verbose output
+            "--verb", "3"
         ])
         
-        # Wait for connection to establish
-        max_attempts = 10
-        for attempt in range(max_attempts):
-            if verify_vpn_connection():
-                print("VPN connection established!")
-                break
-            print(f"Waiting for VPN connection... Attempt {attempt + 1}/{max_attempts}")
-            time.sleep(2)
+        # Wait for connection to establish with progress bar
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Establishing VPN connection...", total=10)
+            for attempt in range(10):
+                if verify_vpn_connection():
+                    progress.update(task, completed=10)
+                    console.print("[green]VPN connection established![/green]")
+                    break
+                progress.update(task, advance=1)
+                time.sleep(2)
         
         # Additional wait to ensure connection is stable
-        time.sleep(5)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Stabilizing connection...", total=5)
+            for i in range(5):
+                progress.update(task, advance=1)
+                time.sleep(1)
         
         # Get new IP
         new_ip = get_current_ip()
-        print(f"New IP: {new_ip}")
+        
+        # Display status table
+        console.print(create_status_table(current_ip, new_ip, server_name))
         
         # Clean up auth file
         try:
@@ -108,29 +152,54 @@ def change_ip():
             
         return True
     except Exception as e:
-        print(f"Error changing IP: {e}")
+        console.print(f"[red]Error changing IP: {e}[/red]")
         return False
 
 def main():
-    print("Starting IP Changer...")
-    print("Press Ctrl+C to stop")
+    # Clear screen and show welcome message
+    console.clear()
+    console.print(Panel.fit(
+        "[bold blue]IP Changer for Kali Linux[/bold blue]\n"
+        "[yellow]Automatically changes your IP address every 5 seconds[/yellow]\n"
+        "[red]Press Ctrl+C to stop[/red]",
+        title="Welcome",
+        border_style="blue"
+    ))
     
     try:
         while True:
             if change_ip():
-                print("Waiting 5 seconds before next change...")
-                time.sleep(5)  # Increased wait time
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TimeElapsedColumn(),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("[cyan]Waiting before next change...", total=5)
+                    for i in range(5):
+                        progress.update(task, advance=1)
+                        time.sleep(1)
             else:
-                print("Failed to change IP. Retrying in 5 seconds...")
-                time.sleep(5)  # Increased wait time
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TimeElapsedColumn(),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("[red]Failed to change IP. Retrying...", total=5)
+                    for i in range(5):
+                        progress.update(task, advance=1)
+                        time.sleep(1)
     except KeyboardInterrupt:
-        print("\nStopping IP Changer...")
+        console.print("\n[red]Stopping IP Changer...[/red]")
         subprocess.run(["sudo", "killall", "openvpn"], stderr=subprocess.DEVNULL)
-        # Clean up auth file if it exists
         try:
             os.remove("vpn_auth.txt")
         except:
             pass
+        console.print("[green]Cleanup complete. Goodbye![/green]")
         sys.exit(0)
 
 if __name__ == "__main__":
